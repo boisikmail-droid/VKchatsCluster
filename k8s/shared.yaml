@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bots-shared
+  namespace: bots
+data:
+  OLLAMA_URL: http://ollama:11434
+  OLLAMA_MODEL: qwen3:8b
+  LLM_ENABLED: "true"
+  LLM_TIMEOUT: "110"
+  VK_API_VERSION: "5.199"
+  VK_API_URL: https://api.vk.com/method
+  VK_REACTION_ID: "1"
+  VK_STALE_SECONDS: "300"
+  DB_CONNECTION: mysql
+  DB_PORT: "3306"

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bot2-config
+  namespace: bots
+data:
+  APP_NAME: bot2
+  VK_OWNER_ID: ""
+  VK_GROUP_ID: ""
+  VK_CONFIRMATION_CODE: ""
+  VK_AUTO_REPLY: "true"
+  VK_AUTO_REPLY_TEXT: "Сообщение получено."
+  VK_STALE_REPLY_TEXT: "Я ненадолго отлучался и не слышал вас."
+  DB_DATABASE: chatbot2
+  LLM_SYSTEM_PROMPT: |
+    Здесь личность второго бота. Этот текст видит только он.
