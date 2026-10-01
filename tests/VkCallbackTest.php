@@ -218,7 +218,7 @@ class VkCallbackTest extends TestCase
         });
         $this->community();
 
-        foreach (['evt-mem-1' => 'кто твой президент?', 'evt-mem-2' => 'повтори что я писал'] as $eventId => $text) {
+        foreach (['evt-mem-1' => 'Филипп, кто твой президент?', 'evt-mem-2' => 'Филипп, повтори что я писал'] as $eventId => $text) {
             $payload = $this->ownerMessage($eventId, time());
             $payload['object']['message']['text'] = $text;
             $this->json('POST', '/api/vk/callback', $payload);
@@ -226,8 +226,8 @@ class VkCallbackTest extends TestCase
         }
 
         $last = (string) end($box->prompts);
-        $this->assertStringContainsString('кто твой президент?', $last);
-        $this->assertStringContainsString('повтори что я писал', $last);
+        $this->assertStringContainsString('Филипп, кто твой президент?', $last);
+        $this->assertStringContainsString('Филипп, повтори что я писал', $last);
     }
 
     public function test_short_word_stays_inside_the_reply(): void
@@ -287,7 +287,7 @@ class VkCallbackTest extends TestCase
         ]);
 
         $this->assertResponseStatus(200);
-        $this->assertStringContainsString('гусь', (string) end($box->prompts));
+        $this->assertSame([], $box->prompts);
     }
 
     public function test_sokolov_from_earlier_messages_does_not_trigger_again(): void
@@ -344,7 +344,7 @@ class VkCallbackTest extends TestCase
                     'from_id' => 111,
                     'peer_id' => 2000000001,
                     'conversation_message_id' => 5,
-                    'text' => 'какая погода?',
+                    'text' => 'Филипп, какая погода?',
                     'out' => 0,
                 ],
             ],
@@ -390,6 +390,174 @@ class VkCallbackTest extends TestCase
         $this->assertResponseStatus(422);
     }
 
+    public function test_own_name_is_answered_and_a_foreign_name_is_not(): void
+    {
+        config(['vk.name_patterns' => 'филипп,филя,киркоров']);
+        $group = $this->community();
+        $processor = $this->app->make(\App\Services\Vk\CallbackProcessor::class);
+
+        $named = $processor->handle($group, [
+            'type' => 'message_new',
+            'object' => [
+                'message' => [
+                    'from_id' => 555,
+                    'peer_id' => 2000000001,
+                    'text' => 'Филя, ты тут?',
+                    'out' => 0,
+                ],
+            ],
+        ]);
+        $foreign = $processor->handle($group, [
+            'type' => 'message_new',
+            'object' => [
+                'message' => [
+                    'from_id' => 555,
+                    'peer_id' => 2000000001,
+                    'text' => 'где Соколов?',
+                    'out' => 0,
+                ],
+            ],
+        ]);
+        $tagged = $processor->handle($group, [
+            'type' => 'message_new',
+            'object' => [
+                'message' => [
+                    'from_id' => 555,
+                    'peer_id' => 2000000001,
+                    'text' => '[club'.$group->vk_id.'|бот] привет',
+                    'out' => 0,
+                ],
+            ],
+        ]);
+
+        $this->assertSame('named', $named);
+        $this->assertNull($foreign);
+        $this->assertSame('tagged', $tagged);
+    }
+
+    public function test_chat_reply_uses_the_quote_form(): void
+    {
+        $processor = $this->app->make(\App\Services\Vk\CallbackProcessor::class);
+        $method = new \ReflectionMethod($processor, 'replyAttempts');
+        $method->setAccessible(true);
+
+        $chat = $method->invoke($processor, 2000000001, 15);
+        $direct = $method->invoke($processor, 555, 15);
+
+        $this->assertTrue($chat[0]['forward']);
+        $this->assertFalse($chat[0]['reply_to']);
+        $this->assertFalse($direct[0]['forward']);
+        $this->assertTrue($direct[0]['reply_to']);
+    }
+
+    public function test_reaction_is_picked_from_the_list_without_the_heart(): void
+    {
+        config([
+            'vk.reaction_id' => 1,
+            'vk.reaction_ids' => '2,4,6',
+        ]);
+        $processor = $this->app->make(\App\Services\Vk\CallbackProcessor::class);
+        $method = new \ReflectionMethod($processor, 'reactionId');
+        $method->setAccessible(true);
+
+        for ($i = 0; $i < 30; $i++) {
+            $this->assertContains($method->invoke($processor), [2, 4, 6]);
+        }
+    }
+
+    public function test_direct_message_is_answered_without_kirkorov_rules(): void
+    {
+        config([
+            'vk.auto_reply' => true,
+            'vk.owner_id' => 0,
+            'vk.kirkorov_rules' => false,
+            'vk.llm_enabled' => true,
+            'vk.api_url' => 'http://127.0.0.1:9',
+            'vk.llm_system_prompt' => 'ты артем',
+        ]);
+        $box = new \stdClass();
+        $box->prompts = [];
+        $this->app->instance(\App\Services\Llm\OllamaClient::class, new class($box) extends \App\Services\Llm\OllamaClient {
+            public function __construct(private \stdClass $box)
+            {
+            }
+
+            public function reply(string $system, string $prompt): string
+            {
+                $this->box->prompts[] = $prompt;
+
+                return 'Отвали.';
+            }
+        });
+        $group = $this->community();
+
+        $this->json('POST', '/api/vk/callback', [
+            'type' => 'message_new',
+            'event_id' => 'evt-dm',
+            'group_id' => $group->vk_id,
+            'secret' => 's3cret',
+            'object' => [
+                'message' => [
+                    'date' => time(),
+                    'from_id' => 555,
+                    'peer_id' => 555,
+                    'text' => 'ну привет',
+                    'out' => 0,
+                ],
+            ],
+        ]);
+
+        $this->assertResponseStatus(200);
+        $this->assertNotEmpty($box->prompts);
+        $this->assertStringContainsString('ну привет', (string) $box->prompts[0]);
+    }
+
+    public function test_chat_without_a_mention_stays_quiet_without_kirkorov_rules(): void
+    {
+        config([
+            'vk.auto_reply' => true,
+            'vk.owner_id' => 0,
+            'vk.kirkorov_rules' => false,
+            'vk.llm_enabled' => true,
+            'vk.api_url' => 'http://127.0.0.1:9',
+            'vk.llm_system_prompt' => 'ты артем',
+        ]);
+        $box = new \stdClass();
+        $box->prompts = [];
+        $this->app->instance(\App\Services\Llm\OllamaClient::class, new class($box) extends \App\Services\Llm\OllamaClient {
+            public function __construct(private \stdClass $box)
+            {
+            }
+
+            public function reply(string $system, string $prompt): string
+            {
+                $this->box->prompts[] = $prompt;
+
+                return 'Отвали.';
+            }
+        });
+        $group = $this->community();
+
+        $this->json('POST', '/api/vk/callback', [
+            'type' => 'message_new',
+            'event_id' => 'evt-chat',
+            'group_id' => $group->vk_id,
+            'secret' => 's3cret',
+            'object' => [
+                'message' => [
+                    'date' => time(),
+                    'from_id' => 555,
+                    'peer_id' => 2000000001,
+                    'text' => 'просто болтовня',
+                    'out' => 0,
+                ],
+            ],
+        ]);
+
+        $this->assertResponseStatus(200);
+        $this->assertSame([], $box->prompts);
+    }
+
     private function ownerMessage(string $eventId, int $date): array
     {
         return [
@@ -403,7 +571,7 @@ class VkCallbackTest extends TestCase
                     'from_id' => 111,
                     'peer_id' => 2000000001,
                     'conversation_message_id' => 15,
-                    'text' => 'привет',
+                    'text' => 'Филипп, привет',
                     'out' => 0,
                 ],
             ],

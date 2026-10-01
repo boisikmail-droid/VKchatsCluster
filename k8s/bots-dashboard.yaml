@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bots-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  bots.json: |
+    {
+      "uid": "bots-live",
+      "title": "Боты",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "30s",
+      "time": {"from": "now-1h", "to": "now"},
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Доступность",
+          "gridPos": {"h": 6, "w": 24, "x": 0, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "max": 1,
+              "mappings": [
+                {"type": "value", "options": {"0": {"text": "нет", "color": "red"}, "1": {"text": "да", "color": "green"}}}
+              ],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+            }
+          },
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+          "targets": [{"expr": "probe_success", "legendFormat": "{{instance}}"}]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Память подов",
+          "gridPos": {"h": 8, "w": 16, "x": 0, "y": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"fillOpacity": 15, "spanNulls": true}}},
+          "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"]}},
+          "targets": [{"expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"bots\", container!=\"\", image!=\"\"})", "legendFormat": "{{pod}}"}]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Перезапуски",
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"custom": {"fillOpacity": 10, "spanNulls": true}}},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+          "targets": [{"expr": "sum by (pod) (kube_pod_container_status_restarts_total{namespace=\"bots\"})", "legendFormat": "{{pod}}"}]
+        }
+      ]
+    }

@@ -109,36 +109,6 @@ docker compose --profile named up -d cloudflared-named
 
 Адрес для ВКонтакте: `https://bot1.melnikovbot.ru/api/vk/callback`. Он не меняется при перезапуске контейнера.
 
-Временный туннель без своего домена каждый раз получает новый адрес:
-
-```powershell
-docker compose --profile tunnel up -d cloudflared
-```
-
-На этой сети туннель Cloudflare не держится: локальный прокси обрывает его UDP-соединение. Рабочий вариант без аккаунта — Pinggy, он идёт по обычному HTTPS.
-
-Приложение должно быть запущено (`docker compose up -d`). В отдельном окне PowerShell:
-
-```powershell
-ssh -p 443 -o StrictHostKeyChecking=accept-new -R 0:127.0.0.1:8080 a.pinggy.io
-```
-
-В выводе будет адрес вида `https://случайное-имя.run.pinggy-free.link`. Для ВКонтакте:
-
-```text
-https://случайное-имя.run.pinggy-free.link/api/vk/callback
-```
-
-Бесплатный адрес живёт около 60 минут и пропадает, если закрыть это окно. После нового запуска адрес другой, его нужно снова вписать в Callback API.
-
-Если нужен туннель, который не отваливается каждый час, в `.env` кладётся `NGROK_AUTHTOKEN` с [dashboard.ngrok.com](https://dashboard.ngrok.com), затем:
-
-```powershell
-docker compose --profile ngrok up
-```
-
-Внешний адрес виден на [http://localhost:4040](http://localhost:4040). У бесплатного ngrok он тоже меняется при перезапуске, если не куплен постоянный домен.
-
 ## API приложения
 
 Заголовок для всех методов, кроме callback: `X-Admin-Token: <ADMIN_TOKEN>`.

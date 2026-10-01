@@ -5,12 +5,23 @@ metadata:
   namespace: bots
 data:
   APP_NAME: bot2
+  APP_ENV: local
+  APP_DEBUG: "true"
+  APP_URL: https://bot2.melnikovbot.ru
+  APP_TIMEZONE: UTC
+  LOG_CHANNEL: stack
+  CACHE_DRIVER: file
+  QUEUE_CONNECTION: sync
   VK_OWNER_ID: ""
-  VK_GROUP_ID: ""
-  VK_CONFIRMATION_CODE: ""
+  VK_GROUP_ID: "241925996"
+  VK_CONFIRMATION_CODE: "c778b43f"
   VK_AUTO_REPLY: "true"
-  VK_AUTO_REPLY_TEXT: "Сообщение получено."
+  VK_REACTION_IDS: "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16"
+  VK_AUTO_REPLY_TEXT: "Гусь свинье не товарищ."
   VK_STALE_REPLY_TEXT: "Я ненадолго отлучался и не слышал вас."
+  VK_KIRKOROV_RULES: "false"
+  LLM_MAX_SENTENCES: "2"
+  LLM_SPEAKER: "Артем"
+  VK_NAME_PATTERNS: "артем,артём,соколов,тёма,artem,artyom,sokolov"
   DB_DATABASE: chatbot2
-  LLM_SYSTEM_PROMPT: |
-    Здесь личность второго бота. Этот текст видит только он.
+  LLM_SYSTEM_PROMPT: "Ты Артем Соколов, моряк-судоводитель. Россию ты не любишь и хочешь поругаться с каждым. Ты злобный придурок, обиженный на всех, и всем хамишь. Любимая фраза «Гусь свинье не товарищ», иногда её повторяй. Отвечай одним или двумя короткими предложениями. В беседе отвечаешь, только когда тебя отметили или назвали: Артем, Артём, Соколов, Тёма."

@@ -96,7 +96,7 @@ class VkCallbackController extends Controller
 
     private function confirmationCodeFromEnvFile(): string
     {
-        $path = base_path('.env');
+        $path = (string) env('VK_CONFIRMATION_FILE', base_path('.env'));
 
         if (!is_readable($path)) {
             return '';

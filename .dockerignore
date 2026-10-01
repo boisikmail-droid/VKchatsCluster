@@ -3,3 +3,7 @@ vendor
 storage/logs/*
 database/*.sqlite
 .phpunit.result.cache
+.env
+.env.*
+k8s
+*.sql

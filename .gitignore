@@ -7,3 +7,8 @@ Homestead.yaml
 /database/*.sqlite
 /cloudflared/status/
 /ТУННЕЛЬ-ОБОРВАЛСЯ.txt
+/k8s/bot2-secret.yaml
+/k8s/bot1-secret.yaml
+/k8s/db-backup.sql
+/k8s/grafana-admin.txt
+/.env.bot2

@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blackbox
+  template:
+    metadata:
+      labels:
+        app: blackbox
+    spec:
+      containers:
+        - name: blackbox
+          image: prom/blackbox-exporter:v0.26.0
+          imagePullPolicy: IfNotPresent
+          args: ["--config.file=/etc/blackbox/config.yml"]
+          ports:
+            - name: http
+              containerPort: 9115
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/blackbox
+      volumes:
+        - name: config
+          configMap:
+            name: blackbox-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blackbox-config
+  namespace: monitoring
+data:
+  config.yml: |
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          valid_status_codes: [200]
+          preferred_ip_protocol: ip4
+      tcp_connect:
+        prober: tcp
+        timeout: 5s
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox
+  namespace: monitoring
+spec:
+  selector:
+    app: blackbox
+  ports:
+    - name: http
+      port: 9115
+      targetPort: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: bots-http
+  namespace: monitoring
+spec:
+  interval: 30s
+  module: http_2xx
+  prober:
+    url: blackbox.monitoring.svc:9115
+  targets:
+    staticConfig:
+      static:
+        - http://bot1.bots.svc.cluster.local/health
+        - http://bot2.bots.svc.cluster.local/health
+        - http://cloudflared.bots.svc.cluster.local:20241/ready
+        - http://ollama.bots.svc.cluster.local:11434/api/tags
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: bots-mysql
+  namespace: monitoring
+spec:
+  interval: 30s
+  module: tcp_connect
+  prober:
+    url: blackbox.monitoring.svc:9115
+  targets:
+    staticConfig:
+      static:
+        - mysql.bots.svc.cluster.local:3306

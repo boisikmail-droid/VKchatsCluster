@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: bots
+data:
+  config.yml: |
+    tunnel: 12a3fedd-2a1a-4d60-9e77-20851faa9faa
+    credentials-file: /home/nonroot/.cloudflared/12a3fedd-2a1a-4d60-9e77-20851faa9faa.json
+    metrics: 0.0.0.0:20241
+    ingress:
+      - hostname: bot1.melnikovbot.ru
+        service: http://bot1:80
+      - hostname: bot2.melnikovbot.ru
+        service: http://bot2:80
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: bots
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflared
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:latest
+          imagePullPolicy: IfNotPresent
+          args: ["tunnel", "--config", "/etc/cloudflared/config.yml", "run"]
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 20241
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 20241
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: creds
+              mountPath: /home/nonroot/.cloudflared
+            - name: config
+              mountPath: /etc/cloudflared/config.yml
+              subPath: config.yml
+      volumes:
+        - name: creds
+          hostPath:
+            path: /var/lib/docker/volumes/chatbot_cloudflared/_data
+            type: Directory
+        - name: config
+          configMap:
+            name: cloudflared-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudflared
+  namespace: bots
+spec:
+  selector:
+    app: cloudflared
+  ports:
+    - name: metrics
+      port: 20241
+      targetPort: 20241

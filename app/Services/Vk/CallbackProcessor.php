@@ -77,17 +77,19 @@ class CallbackProcessor
             return null;
         }
 
-        if ($this->isOwner($fromId)) {
-            return 'owner';
-        }
+        $message = $payload['object']['message'] ?? [];
+        $text = (string) ($message['text'] ?? '');
+        $peerId = (int) ($message['peer_id'] ?? 0);
 
-        $text = (string) (($payload['object']['message']['text'] ?? ''));
-
-        if ($this->mentionsSokolov($text) || $this->mentionsBot($text, $group)) {
+        if ($peerId > 0 && $peerId < 2000000000) {
             return 'tagged';
         }
 
-        return $this->mentionsOwner($text) ? 'mention' : null;
+        if ($this->mentionsBot($text, $group)) {
+            return 'tagged';
+        }
+
+        return $this->mentionsOwnName($text) ? 'named' : null;
     }
 
     public function deliver(VkGroup $group, array $payload, string $mode): void
@@ -98,8 +100,8 @@ class CallbackProcessor
             return;
         }
 
-        if ($mode === 'tagged') {
-            $this->reactToTag($group, $payload);
+        if ($mode === 'tagged' || $mode === 'named') {
+            $this->reactToAddress($group, $payload, $mode === 'tagged');
 
             return;
         }
@@ -142,6 +144,11 @@ class CallbackProcessor
         $ownerId = (int) config('vk.owner_id');
 
         return $ownerId > 0 && $fromId === $ownerId;
+    }
+
+    private function kirkorovRules(): bool
+    {
+        return filter_var(config('vk.kirkorov_rules'), FILTER_VALIDATE_BOOLEAN);
     }
 
     private function isStale(array $payload): bool
@@ -225,7 +232,7 @@ class CallbackProcessor
         $this->sendPhrase($group, $client, $peerId, $cmid, $this->remarkText($text));
     }
 
-    private function reactToTag(VkGroup $group, array $payload): void
+    private function reactToAddress(VkGroup $group, array $payload, bool $quote): void
     {
         $message = $payload['object']['message'] ?? [];
         $peerId = (int) ($message['peer_id'] ?? 0);
@@ -236,8 +243,16 @@ class CallbackProcessor
 
         $client = new VkClient($group->access_token);
         $cmid = (int) ($message['conversation_message_id'] ?? 0);
+        $fromId = (int) ($message['from_id'] ?? 0);
+        $audience = $this->isOwner($fromId) ? 'owner' : 'other';
         $this->sendReaction($group, $client, $peerId, $cmid);
-        $this->sendPhrase($group, $client, $peerId, $cmid, $this->replyText($peerId, $message, 'other'));
+        $this->sendPhrase(
+            $group,
+            $client,
+            $peerId,
+            $quote ? $cmid : 0,
+            $this->replyText($peerId, $message, $audience)
+        );
     }
 
     private function mentionsBot(string $text, VkGroup $group): bool
@@ -251,6 +266,33 @@ class CallbackProcessor
         $screen = trim((string) $group->screen_name);
 
         return $screen !== '' && (bool) preg_match('/(?<![\p{L}\d])@?'.preg_quote($screen, '/').'(?![\p{L}\d])/iu', $text);
+    }
+
+    private function mentionsOwnName(string $text): bool
+    {
+        $raw = trim((string) config('vk.name_patterns', ''));
+
+        if ($raw === '' || $text === '') {
+            return false;
+        }
+
+        $plain = preg_replace('/\[(?:id|club)\d+\|([^\]]+)\]/u', '$1', $text) ?? $text;
+
+        foreach (preg_split('/\s*,\s*/u', $raw) ?: [] as $part) {
+            $part = trim($part);
+
+            if ($part === '') {
+                continue;
+            }
+
+            $pattern = '/(?<![\p{L}\d])'.preg_quote($part, '/').'\p{L}{0,4}(?![\p{L}\d])/iu';
+
+            if (preg_match($pattern, $plain)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function hideSokolov(string $text, bool $keep): string
@@ -303,53 +345,79 @@ class CallbackProcessor
             return;
         }
 
-        $params = [
-            'peer_id' => $peerId,
-            'random_id' => random_int(1, PHP_INT_MAX),
-            'message' => $text,
-        ];
+        $sent = false;
+        $attached = false;
 
-        if ($cmid > 0) {
-            $params['reply_to'] = $cmid;
-        }
+        foreach ($this->replyAttempts($peerId, $cmid) as $attempt) {
+            $params = [
+                'peer_id' => $peerId,
+                'random_id' => random_int(1, PHP_INT_MAX),
+                'message' => $text,
+            ];
 
-        try {
-            $client->call('messages.send', $params);
-        } catch (VkApiException $e) {
-            if ($cmid <= 0) {
+            if ($attempt['reply_to']) {
+                $params['reply_to'] = $cmid;
+            }
+
+            if ($attempt['forward']) {
+                $params['forward'] = json_encode([
+                    'peer_id' => $peerId,
+                    'conversation_message_ids' => [$cmid],
+                    'is_reply' => true,
+                ], JSON_UNESCAPED_UNICODE);
+            }
+
+            try {
+                $client->call('messages.send', $params);
+                $sent = true;
+                $attached = $attempt['reply_to'] || $attempt['forward'];
+                break;
+            } catch (VkApiException $e) {
                 Log::warning('vk auto reply failed', [
                     'group_id' => $group->vk_id,
                     'error' => $e->getMessage(),
                 ]);
-
-                return;
             }
+        }
 
-            unset($params['reply_to']);
-            $params['random_id'] = random_int(1, PHP_INT_MAX);
-
-            try {
-                $client->call('messages.send', $params);
-            } catch (VkApiException $again) {
-                Log::warning('vk auto reply failed', [
-                    'group_id' => $group->vk_id,
-                    'error' => $again->getMessage(),
-                ]);
-
-                return;
-            }
+        if (!$sent) {
+            return;
         }
 
         $this->logBotAction($group, $peerId, 'message_out', [
             'text' => $text,
-            'reply_to' => $cmid > 0 ? $cmid : null,
+            'reply_to' => $attached ? $cmid : null,
         ]);
+    }
+
+    /**
+     * @return array<int, array{reply_to: bool, forward: bool}>
+     */
+    private function replyAttempts(int $peerId, int $cmid): array
+    {
+        if ($cmid <= 0) {
+            return [['reply_to' => false, 'forward' => false]];
+        }
+
+        if ($peerId >= 2000000000) {
+            return [
+                ['reply_to' => false, 'forward' => true],
+                ['reply_to' => true, 'forward' => true],
+                ['reply_to' => true, 'forward' => false],
+                ['reply_to' => false, 'forward' => false],
+            ];
+        }
+
+        return [
+            ['reply_to' => true, 'forward' => false],
+            ['reply_to' => false, 'forward' => false],
+        ];
     }
 
     private function replyText(int $peerId, array $message, string $audience = 'owner'): string
     {
         $own = trim((string) ($message['text'] ?? ''));
-        $fallback = $audience === 'owner'
+        $fallback = $audience === 'owner' || !$this->kirkorovRules()
             ? trim((string) config('vk.auto_reply_text'))
             : 'Ну что ж, я вас услышал. Звезда снисходит не каждому.';
 
@@ -373,16 +441,17 @@ class CallbackProcessor
             $text = $this->withoutEcho($this->ollama->reply($system, $prompt), $own);
 
             if ($this->unusable($text, $own)) {
+                $retry = 'Ответь по сути, одно или два коротких предложения.';
                 $text = $this->withoutEcho($this->ollama->reply(
                     $system,
-                    "Последняя реплика: «".$this->clip($own)."». Ответь по сути, от нескольких слов до пяти предложений."
+                    "Последняя реплика: «".$this->clip($own)."». ".$retry
                 ), $own);
             }
 
             if ($this->unusable($text, $own)) {
                 Log::warning('llm reply unusable', ['text' => $text]);
 
-                $text = $audience === 'owner'
+                $text = $this->kirkorovRules() && $audience === 'owner'
                     ? 'Виктор, ты как всегда прав. Я перед тобой склоняюсь.'
                     : $fallback;
             }
@@ -397,7 +466,7 @@ class CallbackProcessor
 
     private function finishReply(string $text, string $source): string
     {
-        return $this->mentionsSokolov($source) ? $this->ensureGoosePun($text) : $text;
+        return $text;
     }
 
     private function unusable(string $text, string $source): bool
@@ -432,13 +501,14 @@ class CallbackProcessor
 
         foreach ($history as $event) {
             $payload = is_array($event->payload) ? $event->payload : [];
-            $keepSokolov = $event->id === $currentId;
+            $keepSokolov = !$this->kirkorovRules() || $event->id === $currentId;
 
             if ($event->event_type === 'message_out') {
                 $text = trim((string) ($payload['text'] ?? ''));
 
                 if ($text !== '') {
-                    $dialogue[] = 'Филипп: '.$this->clip($this->hideSokolov($text, $keepSokolov), 400);
+                    $speakerName = trim((string) config('vk.speaker_name', 'Филипп'));
+                    $dialogue[] = ($speakerName === '' ? 'Филипп' : $speakerName).': '.$this->clip($this->hideSokolov($text, $keepSokolov), 400);
                 }
 
                 continue;
@@ -458,7 +528,8 @@ class CallbackProcessor
         $own = trim((string) ($message['text'] ?? ''));
 
         if ($dialogue === []) {
-            $dialogue[] = 'Виктор: '.($own === '' ? '(сообщение без текста)' : $this->clip($own, 400));
+            $who = $this->kirkorovRules() ? 'Виктор' : 'Участник';
+            $dialogue[] = $who.': '.($own === '' ? '(сообщение без текста)' : $this->clip($own, 400));
         }
 
         $reply = trim((string) ($message['reply_message']['text'] ?? ''));
@@ -467,16 +538,14 @@ class CallbackProcessor
             $dialogue[] = 'Это ответ на фразу: '.$this->clip($this->hideSokolov($reply, false), 400);
         }
 
-        $role = $audience === 'owner' ? $this->roleRequest($own) : null;
+        $role = $this->kirkorovRules() && $audience === 'owner' ? $this->roleRequest($own) : null;
         $voice = $role !== null
             ? 'На эту одну реплику говори как '.$role.', живо и в несколько слов. Потом снова будешь Киркоровым.'
-            : ($audience === 'owner'
-                ? 'Ответь Виктору. Он твой президент, герой и давний друг: хвали его и не спорь. Учти реплики выше, в том числе чужие. От нескольких слов до пяти предложений.'
-                : 'Ответь не Виктору: очень пафосно, свысока и снисходительно. Учти реплики выше, в том числе чужие. От нескольких слов до пяти предложений.');
-
-        if ($this->mentionsSokolov($own)) {
-            $voice .= ' Обязательно обыграй слова гусь, свинья и не товарищ в любом порядке.';
-        }
+            : ($this->kirkorovRules()
+                ? ($audience === 'owner'
+                    ? 'Ответь Виктору. Он твой президент, герой и давний друг: хвали его и не спорь. Учти реплики выше, в том числе чужие. Одно или два коротких предложения.'
+                    : 'Ответь не Виктору: очень пафосно, свысока и снисходительно. Учти реплики выше, в том числе чужие. Одно или два коротких предложения.')
+                : 'Ответь на последнюю реплику в своём характере. Одно или два коротких предложения.');
 
         return "Беседа:\n".implode("\n", $dialogue)."\n\n".$voice;
     }
@@ -554,9 +623,31 @@ class CallbackProcessor
         return $text;
     }
 
+    private function reactionId(): int
+    {
+        $raw = trim((string) config('vk.reaction_ids', ''));
+        $ids = [];
+
+        if ($raw !== '') {
+            foreach (preg_split('/\s*,\s*/', $raw) ?: [] as $part) {
+                $id = (int) $part;
+
+                if ($id > 0) {
+                    $ids[] = $id;
+                }
+            }
+        }
+
+        if ($ids === []) {
+            return (int) config('vk.reaction_id');
+        }
+
+        return $ids[random_int(0, count($ids) - 1)];
+    }
+
     private function sendReaction(VkGroup $group, VkClient $client, int $peerId, int $conversationMessageId): void
     {
-        $reactionId = (int) config('vk.reaction_id');
+        $reactionId = $this->reactionId();
 
         if ($reactionId <= 0 || $conversationMessageId <= 0) {
             return;

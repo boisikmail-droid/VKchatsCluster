@@ -3,4 +3,6 @@ credentials-file: /home/nonroot/.cloudflared/12a3fedd-2a1a-4d60-9e77-20851faa9fa
 ingress:
   - hostname: bot1.melnikovbot.ru
     service: http://nginx:80
+  - hostname: bot2.melnikovbot.ru
+    service: http://nginx-bot2:80
   - service: http_status:404

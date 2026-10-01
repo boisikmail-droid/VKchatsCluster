@@ -1,0 +1,55 @@
+# Данные — том Compose chatbot_mysql_data. Пока этот под запущен, docker compose
+# поднимать нельзя: два процесса MySQL на одних файлах испортят базу.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: bots
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.4
+          imagePullPolicy: IfNotPresent
+          args: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: root
+          ports:
+            - containerPort: 3306
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: data
+          hostPath:
+            path: /var/lib/docker/volumes/chatbot_mysql_data/_data
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: bots
+spec:
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306

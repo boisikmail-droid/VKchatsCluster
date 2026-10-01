@@ -19,7 +19,7 @@ class OllamaClient
             'think' => false,
             'options' => [
                 'temperature' => 0.8,
-                'num_predict' => 280,
+                'num_predict' => max(40, (int) config('vk.llm_num_predict', 280)),
                 'num_ctx' => 2048,
             ],
         ], JSON_UNESCAPED_UNICODE);
@@ -80,7 +80,8 @@ class OllamaClient
         $line = trim($text, " \t\"'«»");
 
         if (preg_match_all('/.*?[.!?](?:\s|$)/u', $line, $matches) && $matches[0] !== []) {
-            $line = trim(implode('', array_slice($matches[0], 0, 5)));
+            $limit = max(1, (int) config('vk.llm_max_sentences', 5));
+            $line = trim(implode('', array_slice($matches[0], 0, $limit)));
         }
 
         if (mb_strlen($line) > 700) {

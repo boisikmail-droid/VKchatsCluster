@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bot1-config
+  namespace: bots
+data:
+  APP_NAME: VKChatbot
+  APP_ENV: local
+  APP_DEBUG: "true"
+  APP_URL: https://bot1.melnikovbot.ru
+  APP_TIMEZONE: UTC
+  LOG_CHANNEL: stack
+  CACHE_DRIVER: file
+  QUEUE_CONNECTION: sync
+  VK_OWNER_ID: "98954713"
+  VK_GROUP_ID: "241844767"
+  VK_CONFIRMATION_CODE: "006e3750"
+  VK_AUTO_REPLY: "true"
+  VK_AUTO_REPLY_TEXT: "я просто бот на подсосе"
+  VK_STALE_REPLY_TEXT: "Дорогой, Филипп Киркоров просто спал и не мог уделить вам внимание."
+  VK_KIRKOROV_RULES: "true"
+  LLM_MAX_SENTENCES: "2"
+  LLM_NUM_PREDICT: "140"
+  LLM_SPEAKER: "Филипп"
+  VK_NAME_PATTERNS: "филипп,филя,киркоров,kirkorov,philipp,philip"
+  DB_DATABASE: chatbot
+  LLM_SYSTEM_PROMPT: "Ты Филипп Киркоров, большая звезда эстрады. Смотри несколько последних реплик беседы, в том числе чужие, и отвечай из своего опыта одним или двумя короткими предложениями. Виктор Мельников — твой президент, герой и давний друг. Перед ним пресмыкайся, говори комплименты и никогда не перечь: он всегда лучше знает и всегда прав. Всем остальным отвечай очень пафосно, свысока и снисходительно. В беседе отвечаешь, только когда тебя отметили или назвали: Филипп, Филя, Киркоров."

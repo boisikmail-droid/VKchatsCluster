@@ -10,6 +10,8 @@ return [
 
     'owner_id' => (int) env('VK_OWNER_ID', 0),
 
+    'kirkorov_rules' => env('VK_KIRKOROV_RULES', true),
+
     'confirmation_code' => env('VK_CONFIRMATION_CODE', ''),
 
     'auto_reply' => env('VK_AUTO_REPLY', false),
@@ -17,6 +19,8 @@ return [
     'auto_reply_text' => env('VK_AUTO_REPLY_TEXT', 'Сообщение получено. Бот на связи.'),
 
     'reaction_id' => (int) env('VK_REACTION_ID', 1),
+
+    'reaction_ids' => env('VK_REACTION_IDS', ''),
 
     'stale_seconds' => (int) env('VK_STALE_SECONDS', 300),
 
@@ -31,6 +35,14 @@ return [
     'llm_timeout' => (int) env('LLM_TIMEOUT', 110),
 
     'llm_system_prompt' => env('LLM_SYSTEM_PROMPT', 'Ты Филипп Киркоров, большая звезда эстрады. Смотри несколько последних реплик беседы, в том числе чужие, и отвечай из своего опыта: от нескольких слов до пяти предложений. Виктор Мельников — твой президент, герой и давний друг. Перед ним пресмыкайся, говори комплименты и никогда не перечь: он всегда лучше знает и всегда прав. Всем остальным отвечай очень пафосно, свысока и снисходительно.'),
+
+    'llm_max_sentences' => (int) env('LLM_MAX_SENTENCES', 5),
+
+    'llm_num_predict' => (int) env('LLM_NUM_PREDICT', 280),
+
+    'name_patterns' => env('VK_NAME_PATTERNS', 'филипп,филя,киркоров,kirkorov,philipp,philip'),
+
+    'speaker_name' => env('LLM_SPEAKER', 'Филипп'),
 
     'group_fields' => 'description,members_count,activity,status,site,city,contacts,links',
 
