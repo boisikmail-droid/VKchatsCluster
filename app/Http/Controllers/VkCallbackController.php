@@ -137,26 +137,33 @@ class VkCallbackController extends Controller
     private function acknowledge(VkGroup $group, array $payload, ?string $deliver)
     {
         $response = $this->plain('ok');
+        $after = function () use ($group, $payload, $deliver) {
+            try {
+                $this->processor->enrichFromPayload($group, $payload);
+            } catch (Throwable $e) {
+                Log::warning('dialog enrich failed', ['error' => $e->getMessage()]);
+            }
 
-        if ($deliver === null) {
-            return $response;
-        }
-
-        if (PHP_SAPI === 'fpm-fcgi' && function_exists('fastcgi_finish_request')) {
-            ignore_user_abort(true);
-            $response->send();
-            fastcgi_finish_request();
+            if ($deliver === null) {
+                return;
+            }
 
             try {
                 $this->processor->deliver($group, $payload, $deliver);
             } catch (Throwable $e) {
                 Log::error('vk delayed reply failed', ['error' => $e->getMessage()]);
             }
+        };
 
+        if (PHP_SAPI === 'fpm-fcgi' && function_exists('fastcgi_finish_request')) {
+            ignore_user_abort(true);
+            $response->send();
+            fastcgi_finish_request();
+            $after();
             exit;
         }
 
-        $this->processor->deliver($group, $payload, $deliver);
+        $after();
 
         return $response;
     }

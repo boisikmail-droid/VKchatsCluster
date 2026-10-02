@@ -3,6 +3,7 @@
 namespace App\Services\Vk;
 
 use App\Models\ActivityEvent;
+use App\Models\Conversation;
 use App\Models\VkGroup;
 use App\Models\VkUser;
 use App\Services\Llm\LlmException;
@@ -16,6 +17,7 @@ class CallbackProcessor
     public function __construct(
         private CommunitySync $communities,
         private OllamaClient $ollama,
+        private ConversationRecorder $dialogs,
     ) {
     }
 
@@ -62,7 +64,7 @@ class CallbackProcessor
                 break;
         }
 
-        ActivityEvent::create([
+        $event = ActivityEvent::create([
             'group_id' => $group->id,
             'user_id' => $user?->id,
             'actor' => $actor,
@@ -72,6 +74,7 @@ class CallbackProcessor
             'payload' => $stored,
             'occurred_at' => $occurredAt,
         ]);
+        $this->dialogs->ingest($group, $event);
 
         if ($type !== 'message_new' || $actor !== 'user' || $this->isServiceMessage($payload)) {
             return null;
@@ -90,6 +93,31 @@ class CallbackProcessor
         }
 
         return $this->mentionsOwnName($text) ? 'named' : null;
+    }
+
+    public function enrichFromPayload(VkGroup $group, array $payload): void
+    {
+        $type = (string) ($payload['type'] ?? '');
+
+        if (!in_array($type, ['message_new', 'message_reply'], true)) {
+            return;
+        }
+
+        $message = $payload['object']['message'] ?? $payload['object'] ?? [];
+        $peerId = (int) ($message['peer_id'] ?? 0);
+
+        if ($peerId <= 0) {
+            return;
+        }
+
+        $conversation = Conversation::query()
+            ->where('group_id', $group->id)
+            ->where('peer_id', $peerId)
+            ->first();
+
+        if ($conversation !== null) {
+            $this->dialogs->enrich($group, $conversation);
+        }
     }
 
     public function deliver(VkGroup $group, array $payload, string $mode): void
@@ -440,11 +468,10 @@ class CallbackProcessor
         try {
             $text = $this->withoutEcho($this->ollama->reply($system, $prompt), $own);
 
-            if ($this->unusable($text, $own)) {
-                $retry = 'Ответь по сути, одно или два коротких предложения.';
+            if ($this->unusable($text, $own) || $this->repeatsEarlier($text, $prompt)) {
                 $text = $this->withoutEcho($this->ollama->reply(
                     $system,
-                    "Последняя реплика: «".$this->clip($own)."». ".$retry
+                    $this->retryPrompt($own, $text)
                 ), $own);
             }
 
@@ -482,6 +509,7 @@ class CallbackProcessor
     {
         $ownerId = (int) config('vk.owner_id');
         $dialogue = [];
+        $previousBot = '';
 
         $history = ActivityEvent::query()
             ->where('peer_id', $peerId)
@@ -505,8 +533,10 @@ class CallbackProcessor
 
             if ($event->event_type === 'message_out') {
                 $text = trim((string) ($payload['text'] ?? ''));
+                $normalized = $this->normalizeReply($text);
 
-                if ($text !== '') {
+                if ($text !== '' && $normalized !== '' && $normalized !== $previousBot) {
+                    $previousBot = $normalized;
                     $speakerName = trim((string) config('vk.speaker_name', 'Филипп'));
                     $dialogue[] = ($speakerName === '' ? 'Филипп' : $speakerName).': '.$this->clip($this->hideSokolov($text, $keepSokolov), 400);
                 }
@@ -533,21 +563,82 @@ class CallbackProcessor
         }
 
         $reply = trim((string) ($message['reply_message']['text'] ?? ''));
-
-        if ($reply !== '') {
-            $dialogue[] = 'Это ответ на фразу: '.$this->clip($this->hideSokolov($reply, false), 400);
-        }
-
         $role = $this->kirkorovRules() && $audience === 'owner' ? $this->roleRequest($own) : null;
         $voice = $role !== null
-            ? 'На эту одну реплику говори как '.$role.', живо и в несколько слов. Потом снова будешь Киркоровым.'
+            ? 'На эту одну реплику говори как '.$role.', живо и по её смыслу. Потом снова будешь Киркоровым. Не повторяй свои прошлые фразы.'
             : ($this->kirkorovRules()
                 ? ($audience === 'owner'
-                    ? 'Ответь Виктору. Он твой президент, герой и давний друг: хвали его и не спорь. Учти реплики выше, в том числе чужие. Одно или два коротких предложения.'
-                    : 'Ответь не Виктору: очень пафосно, свысока и снисходительно. Учти реплики выше, в том числе чужие. Одно или два коротких предложения.')
-                : 'Ответь на последнюю реплику в своём характере. Одно или два коротких предложения.');
+                    ? 'Ответь на смысл последней реплики, а не общей похвалой. Виктору льсти и не спорь, но реагируй на то, что он написал: вопрос, шутку, угрозу. Не повторяй свои прошлые фразы. Одно или два коротких предложения.'
+                    : 'Ответь на смысл последней реплики: пафосно, свысока и снисходительно. Не повторяй свои прошлые фразы. Одно или два коротких предложения.')
+                : 'Ответь на смысл последней реплики в своём характере. Не повторяй свои прошлые фразы и не вставляй любимую поговорку, если уже говорил её недавно. Одно или два коротких предложения.');
 
-        return "Беседа:\n".implode("\n", $dialogue)."\n\n".$voice;
+        $lastLine = array_pop($dialogue);
+
+        if ($reply !== '') {
+            $lastLine .= "\nЭто ответ на фразу: ".$this->clip($this->hideSokolov($reply, false), 400);
+        }
+
+        $past = $dialogue === [] ? '' : "Предыдущие реплики:\n".implode("\n", $dialogue)."\n\n";
+
+        return $past."Последняя реплика, ответь только на неё:\n".$lastLine."\n\n".$voice;
+    }
+
+    private function retryPrompt(string $own, string $rejected): string
+    {
+        $banned = trim($rejected) === '' ? '' : ' Не пиши снова: «'.$this->clip($rejected, 180).'».';
+
+        return 'Последняя реплика: «'.$this->clip($own).'». Ответь на её смысл другими словами, одно или два коротких предложения.'.$banned;
+    }
+
+    private function repeatsEarlier(string $text, string $prompt): bool
+    {
+        $current = $this->normalizeReply($text);
+        $speaker = trim((string) config('vk.speaker_name', 'Филипп'));
+        $speaker = $speaker === '' ? 'Филипп' : $speaker;
+
+        if (mb_strlen($current) < 12 || !preg_match_all('/^'.preg_quote($speaker, '/').': (.+)$/mu', $prompt, $matches)) {
+            return false;
+        }
+
+        $earlier = $this->normalizeReply((string) end($matches[1]));
+
+        return $this->tooClose($current, $earlier);
+    }
+
+    private function tooClose(string $left, string $right): bool
+    {
+        if ($left === '' || $right === '') {
+            return false;
+        }
+
+        if ($left === $right) {
+            return true;
+        }
+
+        $short = mb_strlen($left) <= mb_strlen($right) ? $left : $right;
+        $long = $short === $left ? $right : $left;
+
+        if (mb_strlen($short) >= 20 && str_contains($long, $short)) {
+            return true;
+        }
+
+        $a = preg_split('/\s+/u', $left, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $b = preg_split('/\s+/u', $right, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $union = array_unique([...$a, ...$b]);
+
+        if ($a === [] || $b === [] || $union === []) {
+            return false;
+        }
+
+        return count(array_intersect($a, $b)) / count($union) >= 0.6;
+    }
+
+    private function normalizeReply(string $text): string
+    {
+        $text = mb_strtolower($text);
+        $text = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $text) ?? $text;
+
+        return trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
     }
 
     private function roleRequest(string $text): ?string
@@ -719,7 +810,7 @@ class CallbackProcessor
 
     private function logBotAction(VkGroup $group, ?int $peerId, string $eventType, array $payload): void
     {
-        ActivityEvent::create([
+        $event = ActivityEvent::create([
             'group_id' => $group->id,
             'user_id' => null,
             'actor' => 'bot',
@@ -728,5 +819,6 @@ class CallbackProcessor
             'payload' => $payload,
             'occurred_at' => Carbon::now(),
         ]);
+        $this->dialogs->ingest($group, $event);
     }
 }

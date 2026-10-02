@@ -48,6 +48,7 @@ metadata:
   name: mysql
   namespace: bots
 spec:
+  type: LoadBalancer
   selector:
     app: mysql
   ports:

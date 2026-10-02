@@ -18,7 +18,7 @@ class OllamaClient
             ],
             'think' => false,
             'options' => [
-                'temperature' => 0.8,
+                'temperature' => 1.0,
                 'num_predict' => max(40, (int) config('vk.llm_num_predict', 280)),
                 'num_ctx' => 2048,
             ],

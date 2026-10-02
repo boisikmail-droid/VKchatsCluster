@@ -32,6 +32,20 @@ spec:
       labels:
         app: cloudflared
     spec:
+      # Go внутри cloudflared не понимает SRV-ответы CoreDNS. Внешние имена
+      # идут на 1.1.1.1, адреса ботов заданы здесь, потому что 1.1.1.1 их не знает.
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 1.1.1.1
+          - 1.0.0.1
+      hostAliases:
+        - ip: 10.106.55.59
+          hostnames:
+            - bot1
+        - ip: 10.107.137.143
+          hostnames:
+            - bot2
       containers:
         - name: cloudflared
           image: cloudflare/cloudflared:latest

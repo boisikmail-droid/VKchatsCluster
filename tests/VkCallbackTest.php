@@ -3,7 +3,11 @@
 namespace Tests;
 
 use App\Models\ActivityEvent;
+use App\Models\Conversation;
+use App\Models\DialogMessage;
 use App\Models\VkGroup;
+use App\Models\VkUser;
+use App\Services\Vk\ConversationRecorder;
 use Illuminate\Support\Facades\Cache;
 use Laravel\Lumen\Testing\DatabaseMigrations;
 
@@ -100,6 +104,212 @@ class VkCallbackTest extends TestCase
             'vk_event_id' => 'evt-1',
         ]);
         $this->assertSame(1, ActivityEvent::where('vk_event_id', 'evt-1')->count());
+        $this->seeInDatabase('conversations', [
+            'kind' => 'dm',
+            'peer_id' => 555,
+            'interlocutor_user_id' => VkUser::where('vk_id', 555)->value('id'),
+        ]);
+        $this->seeInDatabase('messages', [
+            'direction' => 'in',
+            'from_vk_id' => 555,
+            'text' => 'привет',
+        ]);
+        $this->seeInDatabase('conversation_members', ['member_vk_id' => 555]);
+        $this->seeInDatabase('conversation_members', ['member_vk_id' => -$group->vk_id]);
+        $this->assertSame(1, Conversation::count());
+        $this->assertSame(1, DialogMessage::count());
+    }
+
+    public function test_chat_message_stores_speaker_and_photo(): void
+    {
+        $group = $this->community();
+
+        $this->json('POST', '/api/vk/callback', [
+            'type' => 'message_new',
+            'event_id' => 'evt-photo',
+            'group_id' => $group->vk_id,
+            'secret' => 's3cret',
+            'object' => [
+                'message' => [
+                    'id' => 20,
+                    'date' => 1700000100,
+                    'from_id' => 555,
+                    'peer_id' => 2000000001,
+                    'conversation_message_id' => 7,
+                    'text' => 'смотри',
+                    'out' => 0,
+                    'attachments' => [[
+                        'type' => 'photo',
+                        'photo' => [
+                            'id' => 99,
+                            'owner_id' => 555,
+                            'sizes' => [
+                                ['width' => 100, 'url' => 'https://example.test/small.jpg'],
+                                ['width' => 400, 'url' => 'https://example.test/big.jpg'],
+                            ],
+                        ],
+                    ]],
+                ],
+            ],
+        ]);
+
+        $this->assertResponseStatus(200);
+        $this->seeInDatabase('conversations', ['kind' => 'chat', 'peer_id' => 2000000001]);
+        $this->seeInDatabase('messages', [
+            'direction' => 'in',
+            'from_vk_id' => 555,
+            'text' => 'смотри',
+            'cmid' => 7,
+            'attachment_count' => 1,
+        ]);
+        $this->seeInDatabase('message_attachments', [
+            'type' => 'photo',
+            'owner_vk_id' => 555,
+            'media_id' => 99,
+            'url' => 'https://example.test/big.jpg',
+        ]);
+        $this->seeInDatabase('conversation_members', ['member_vk_id' => 555]);
+    }
+
+    public function test_bot_reply_is_linked_to_the_question(): void
+    {
+        $group = $this->community();
+        $event = ActivityEvent::create([
+            'group_id' => $group->id,
+            'actor' => 'user',
+            'event_type' => 'message_new',
+            'peer_id' => 555,
+            'payload' => [
+                'object' => [
+                    'message' => [
+                        'from_id' => 555,
+                        'peer_id' => 555,
+                        'conversation_message_id' => 4,
+                        'text' => 'вопрос',
+                    ],
+                ],
+            ],
+            'occurred_at' => '2026-10-02 12:00:00',
+        ]);
+        $reply = ActivityEvent::create([
+            'group_id' => $group->id,
+            'actor' => 'bot',
+            'event_type' => 'message_out',
+            'peer_id' => 555,
+            'payload' => ['text' => 'ответ', 'reply_to' => 4],
+            'occurred_at' => '2026-10-02 12:00:01',
+        ]);
+        $echo = ActivityEvent::create([
+            'group_id' => $group->id,
+            'actor' => 'bot',
+            'event_type' => 'message_reply',
+            'peer_id' => 555,
+            'payload' => [
+                'object' => [
+                    'message' => [
+                        'from_id' => -$group->vk_id,
+                        'peer_id' => 555,
+                        'conversation_message_id' => 5,
+                        'text' => 'ответ',
+                        'out' => 1,
+                    ],
+                ],
+            ],
+            'occurred_at' => '2026-10-02 12:00:02',
+        ]);
+
+        $recorder = $this->app->make(ConversationRecorder::class);
+        $recorder->ingest($group, $event);
+        $recorder->ingest($group, $reply);
+        $recorder->ingest($group, $echo);
+        $recorder->ingest($group, $echo);
+
+        $question = DialogMessage::where('direction', 'in')->first();
+        $answer = DialogMessage::where('direction', 'out')->first();
+
+        $this->assertNotNull($question);
+        $this->assertNotNull($answer);
+        $this->assertSame(1, DialogMessage::where('direction', 'out')->count());
+        $this->assertSame($question->id, $answer->in_reply_to_message_id);
+        $this->assertSame(5, $answer->cmid);
+    }
+
+    public function test_vk_echo_before_our_log_stays_one_message(): void
+    {
+        $group = $this->community();
+        $echo = ActivityEvent::create([
+            'group_id' => $group->id,
+            'actor' => 'bot',
+            'event_type' => 'message_reply',
+            'peer_id' => 555,
+            'payload' => [
+                'object' => [
+                    'message' => [
+                        'from_id' => -$group->vk_id,
+                        'peer_id' => 555,
+                        'conversation_message_id' => 9,
+                        'text' => 'один ответ',
+                        'out' => 1,
+                    ],
+                ],
+            ],
+            'occurred_at' => '2026-10-02 12:01:00',
+        ]);
+        $reply = ActivityEvent::create([
+            'group_id' => $group->id,
+            'actor' => 'bot',
+            'event_type' => 'message_out',
+            'peer_id' => 555,
+            'payload' => ['text' => 'один ответ', 'reply_to' => 8],
+            'occurred_at' => '2026-10-02 12:01:01',
+        ]);
+
+        $recorder = $this->app->make(ConversationRecorder::class);
+        $recorder->ingest($group, $echo);
+        $recorder->ingest($group, $reply);
+
+        $this->assertSame(1, DialogMessage::where('direction', 'out')->count());
+        $this->assertSame(9, DialogMessage::where('direction', 'out')->value('cmid'));
+        $this->assertSame(8, DialogMessage::where('direction', 'out')->value('reply_to_cmid'));
+    }
+
+    public function test_chat_history_counts_each_speaker_once(): void
+    {
+        $group = $this->community();
+        $recorder = $this->app->make(ConversationRecorder::class);
+        $first = [
+            'peer_id' => 2000000001,
+            'from_id' => 555,
+            'conversation_message_id' => 3,
+            'date' => 1700000000,
+            'text' => 'раз',
+            'out' => 0,
+        ];
+
+        $this->assertTrue($recorder->storeHistoryMessage($group, $first));
+        $this->assertFalse($recorder->storeHistoryMessage($group, $first));
+        $this->assertTrue($recorder->storeHistoryMessage($group, [
+            'peer_id' => 2000000001,
+            'from_id' => 777,
+            'conversation_message_id' => 4,
+            'date' => 1700000100,
+            'text' => 'два',
+            'out' => 0,
+        ]));
+        $this->assertFalse($recorder->storeHistoryMessage($group, [
+            'peer_id' => 2000000001,
+            'from_id' => 555,
+            'conversation_message_id' => 5,
+            'date' => 1700000200,
+            'text' => '',
+            'out' => 0,
+            'action' => ['type' => 'chat_invite_user'],
+        ]));
+
+        $this->assertSame(2, DialogMessage::where('direction', 'in')->count());
+        $this->seeInDatabase('vk_users', ['vk_id' => 555]);
+        $this->seeInDatabase('vk_users', ['vk_id' => 777]);
+        $this->seeInDatabase('conversations', ['kind' => 'chat', 'peer_id' => 2000000001]);
     }
 
     public function test_join_and_leave_update_membership(): void
@@ -228,6 +438,7 @@ class VkCallbackTest extends TestCase
         $last = (string) end($box->prompts);
         $this->assertStringContainsString('Филипп, кто твой президент?', $last);
         $this->assertStringContainsString('Филипп, повтори что я писал', $last);
+        $this->assertStringContainsString('ответь только на неё', $last);
     }
 
     public function test_short_word_stays_inside_the_reply(): void

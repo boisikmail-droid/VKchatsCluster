@@ -47,6 +47,11 @@ class VkGroup extends Model
         return $this->hasMany(ActivityEvent::class, 'group_id');
     }
 
+    public function conversations(): HasMany
+    {
+        return $this->hasMany(Conversation::class, 'group_id');
+    }
+
     public function fillFromVk(array $payload): void
     {
         $this->vk_id = (int) $payload['id'];
